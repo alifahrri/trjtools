@@ -19,3 +19,9 @@ set_target_properties(
     PROPERTIES
     CXX_STANDARD 17
 )
+
+
+target_link_libraries(
+    ${PROJECT_NAME}-example2
+    pthread
+)

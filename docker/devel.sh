@@ -27,4 +27,5 @@ if [ -z "$NAME" -a "$NAME" != " " ]; then
         NAME=trjtools
 fi
 
-docker build -t $NAME -f $DIR/dockerfile $DIR/..
+echo ${POSITIONAL[@]}
+docker run -it -v $DIR/../:/app/trjtools ${POSITIONAL[@]} $NAME bash

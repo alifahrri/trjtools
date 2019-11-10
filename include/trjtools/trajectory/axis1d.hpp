@@ -2,6 +2,7 @@
 #define TRJTOOLS_TRAJECTORY_AXIS1D_HPP
 
 #include "trjtools/utility.hpp"
+#include "nmtools/integration/trapezoidal.hpp"
 
 #include <type_traits>
 #include <vector>
@@ -21,7 +22,7 @@ namespace trjtools {
              * @note this routine assume the initial position and derivatives are zero
              */
             template <typename ScalarPos, typename ScalarVel, typename ScalarAcc>
-            auto second_order(const ScalarPos &xbar, const ScalarVel &vbar, const ScalarAcc &abar)
+            constexpr auto second_order(const ScalarPos &xbar, const ScalarVel &vbar, const ScalarAcc &abar)
             {
                 assert(xbar > 0. && vbar > 0. && abar > 0.);
                 auto t_abar = sqrt(xbar / abar);
@@ -47,16 +48,16 @@ namespace trjtools {
              */
             template <typename ScalarPos, typename ScalarVel, typename ScalarAcc, 
                 typename Scalar, typename Iterable>
-            auto second_order_profile(
+            constexpr auto second_order_profile(
                 const ScalarPos &xbar, const ScalarVel &vbar, const ScalarAcc &abar, 
                 const Scalar &tx, const Scalar &tv, const Scalar &ta, const Iterable &time_points)
             {
                 static_assert(utility::traits::is_std_array_or_vector<Iterable>::value,
                     "currently only support std::array or std::vector for Iterable (time_points)"
                 );
-                utility::mpl::copy_std_container_t<Iterable,ScalarPos> xs;
-                utility::mpl::copy_std_container_t<Iterable,ScalarVel> vs;
-                utility::mpl::copy_std_container_t<Iterable,ScalarAcc> as;
+                utility::mpl::copy_std_container_t<Iterable,ScalarPos> xs{};
+                utility::mpl::copy_std_container_t<Iterable,ScalarVel> vs{};
+                utility::mpl::copy_std_container_t<Iterable,ScalarAcc> as{};
                 auto tv0 = ta;
                 auto tv1 = ta + tv;
                 auto x_tv0 = 0.5 * abar * tv0 * tv0;
@@ -88,7 +89,7 @@ namespace trjtools {
             } // second_order_profile
 
             namespace helper {
-                auto solver_4th_3rd_poly(auto t_dbar, auto xbar, auto dbar) {
+                constexpr auto solver_4th_3rd_poly(auto t_dbar, auto xbar, auto dbar) {
                     using namespace std::complex_literals;
                     auto I = 1i;
                     auto root1 = -1.0/3.0*pow(t_dbar, 2)/cbrt(-55*pow(t_dbar, 3) 
@@ -119,14 +120,14 @@ namespace trjtools {
                     return std::make_tuple(root1, std::complex<decltype(xbar)>{root2}, std::complex<decltype(xbar)>{root3});
                 } // solver_4th_3rd_poly
 
-                auto solver_4th_2nd_poly(auto t_dbar, auto vbar, auto dbar)
+                constexpr auto solver_4th_2nd_poly(auto t_dbar, auto vbar, auto dbar)
                 {
                     auto root1 = (1.0/2.0)*(-3*dbar*pow(t_dbar, 2) + sqrt(dbar*t_dbar*(dbar*pow(t_dbar, 3) + 4*vbar)))/(dbar*t_dbar);
                     auto root2 = -1.0/2.0*(3*dbar*pow(t_dbar, 2) + sqrt(dbar*t_dbar*(dbar*pow(t_dbar, 3) + 4*vbar)))/(dbar*t_dbar);
                     return std::make_tuple(root1, root2);
-                }
+                } // solver_4th_2nd_poly
 
-                auto solver_4th_2nd_poly_ta(auto t_jbar, auto t_dbar, auto xbar, auto dbar)
+                constexpr auto solver_4th_2nd_poly_ta(auto t_jbar, auto t_dbar, auto xbar, auto dbar)
                 {
                     auto root1 = (1.0/2.0)*(-3*dbar*pow(t_dbar, 2)*(2*t_dbar + 3*t_jbar) + sqrt(dbar*t_dbar*(4*dbar*pow(t_dbar, 5) 
                         + 12*dbar*pow(t_dbar, 4)*t_jbar - 23*dbar*pow(t_dbar, 3)*pow(t_jbar, 2) - 48*dbar*pow(t_dbar, 2)*pow(t_jbar, 3) 
@@ -135,12 +136,128 @@ namespace trjtools {
                         + 12*dbar*pow(t_dbar, 4)*t_jbar - 23*dbar*pow(t_dbar, 3)*pow(t_jbar, 2) - 48*dbar*pow(t_dbar, 2)*pow(t_jbar, 3) 
                         - 8*dbar*t_dbar*pow(t_jbar, 4) + 4*t_dbar*xbar + 4*t_jbar*xbar)))/(dbar*t_dbar*(t_dbar + t_jbar));
                     return std::make_tuple(root1, root2);
-                }
-            }
+                } // solver_4th_2nd_poly_ta
 
+                /**
+                 * @brief construct lambda defining the trajectory of the deriv. of the jerk
+                 * 
+                 * @tparam ScalarDJerk 
+                 * @tparam Iterable 
+                 * @param dbar constraint of djerk
+                 * @param time_profile solved time profile, should have 16 size
+                 * @return auto callable lambda
+                 */
+                template <typename ScalarDJerk, typename Iterable>
+                constexpr auto fourth_order_djerk_profile(const ScalarDJerk &dbar, const Iterable &time_profile)
+                {
+                    /* define function of the derivative of the jerk */
+                    assert(std::size(time_profile)==16);
+                    return [=](const auto &t) {
+                        ScalarDJerk d{0.};
+                        size_t idx{0};
+                        if ((t < time_profile[0]) || (t > time_profile[15]))
+                            idx = 0;
+                        else {
+                            for (size_t i=1; i<std::size(time_profile); i++)
+                                if (t <= time_profile[i]) {
+                                    idx = i;
+                                    break;
+                                }
+                        }
+                        switch (idx)
+                        {
+                        case 3: case 5: case 9: case 15:
+                            d = -dbar;
+                            break;
+                        case 1: case 7: case 11: case 13:
+                            d = dbar;
+                            break;
+                        default:
+                            d = 0.;
+                            break;
+                        }
+                        return d;
+                    };
+                } // fourth_order_djerk_profile
+
+                /**
+                 * @brief naive implementation of 4th order trajectory profiles
+                 *      returns callables that define the trajectories
+                 * 
+                 * @tparam integral_segment=100 
+                 * @tparam ScalarDJerk 
+                 * @tparam Iterable 
+                 * @param dbar maximum value of the derivative of the jerk
+                 * @param time_profile the computed time profile of the trajectory
+                 * @return auto tuple of size 4 of callable functions
+                 */
+                template <size_t integral_segment=100, typename ScalarDJerk, typename Iterable>
+                auto fourth_order_profile_fn(const ScalarDJerk &dbar, const Iterable &time_profile)
+                {
+                    auto dj_fn = fourth_order_djerk_profile(dbar, time_profile);
+                    /* define function for j, a, v, x */
+                    auto j_fn = utility::integrate<integral_segment>(dj_fn);
+                    auto a_fn = utility::integrate<integral_segment>(j_fn);
+                    auto v_fn = utility::integrate<integral_segment>(a_fn);
+                    auto x_fn = utility::integrate<integral_segment>(v_fn);
+                    return std::make_tuple(x_fn,v_fn,a_fn,j_fn,dj_fn);
+                } // fourth_order_profile_fn
+
+                /**
+                 * @brief template-overloaded version of 4th order trajectory func
+                 *      returns callables that define the trajectories
+                 * 
+                 * @tparam time_segment 
+                 * @tparam integral_segment 
+                 * @tparam ScalarDJerk 
+                 * @tparam Iterable 
+                 * @param dbar maximum value of the derivative of the jerk
+                 * @param time_profile the computed time profile of the trajectory
+                 * @return auto tuple of size 4 of callable functions
+                 */
+                template <size_t time_segment, size_t integral_segment, typename ScalarDJerk, typename Iterable>
+                constexpr auto fourth_order_profile_fn(const ScalarDJerk &dbar, const Iterable &time_profile)
+                {
+                    using split_container_t = utility::mpl::copy_std_container_t<
+                        Iterable,typename Iterable::value_type, time_segment+1>;
+                    auto dj_fn = fourth_order_djerk_profile(dbar, time_profile);
+                    auto time_pts = utility::split<split_container_t>(time_profile.back(),time_segment);
+                    /* define function for j, a, v, x */
+                    auto dj_int = utility::interpolate(time_pts, 
+                        utility::sample(dj_fn, time_pts));
+                    auto j_fn   = utility::integrate<integral_segment>(dj_int);
+                    auto j_int  = utility::interpolate(time_pts,
+                        utility::sample(j_fn, time_pts));
+                    auto a_fn   = utility::integrate<integral_segment>(j_int);
+                    auto a_int  = utility::interpolate(time_pts,
+                        utility::sample(a_fn, time_pts));
+                    auto v_fn   = utility::integrate<integral_segment>(a_int);
+                    auto v_int  = utility::interpolate(time_pts,
+                        utility::sample(v_fn,time_pts));
+                    auto x_fn   = utility::integrate<integral_segment>(v_int);
+                    return std::make_tuple(x_fn,v_fn,a_fn,j_fn,dj_fn);
+                } // fourth_order_profile_fn
+            } // namespace helper
+
+            /**
+             * @brief compute the time coefficient that define the trajectory while 
+             *      satisfying the constraints
+             * 
+             * @tparam ScalarPos 
+             * @tparam ScalarVel 
+             * @tparam ScalarAcc 
+             * @tparam ScalarJerk 
+             * @tparam ScalarDJerk 
+             * @param xbar target position 
+             * @param vbar allowed maximum value of velocity
+             * @param abar allowed maximum value of acceleration
+             * @param jbar allowed maximum value of jerk
+             * @param dbar allowed maximum value of the derivative of the jerk
+             * @return constexpr auto 
+             */
             template <typename ScalarPos, typename ScalarVel, typename ScalarAcc,
                 typename ScalarJerk, typename ScalarDJerk>
-            auto fourth_order(const ScalarPos &xbar, const ScalarVel &vbar, 
+            constexpr auto fourth_order(const ScalarPos &xbar, const ScalarVel &vbar, 
                 const ScalarAcc &abar, const ScalarJerk &jbar, const ScalarDJerk &dbar)
             {
                 auto t_dbar = sqrt(sqrt(xbar/(8*dbar)));
@@ -184,11 +301,21 @@ namespace trjtools {
                 return std::make_tuple(t_vbar, t_abar, t_jbar, t_dbar);
             } // fourth_order
 
+            /**
+             * @brief construct array of time profile defining the trajectory
+             * 
+             * @tparam Scalar 
+             * @param t_vbar computed value of constant velocity
+             * @param t_abar computed value of constant acceleration
+             * @param t_jbar computed value of constant jerk
+             * @param t_dbar computed value of time swicth of the derivative of the jerk
+             * @return constexpr auto array of Scalar with size of 16
+             */
             template <typename Scalar>
-            auto fourth_order_time_points(const Scalar &t_vbar, 
+            constexpr auto fourth_order_time_points(const Scalar &t_vbar, 
                 const Scalar &t_abar, const Scalar &t_jbar, const Scalar &t_dbar)
             {
-                std::array<Scalar,16> t;
+                std::array<Scalar,16> t{};
                 t[0]  = 0.;
                 t[1]  = t[0]  + t_dbar;
                 t[2]  = t[1]  + t_jbar;
@@ -208,69 +335,30 @@ namespace trjtools {
                 return t;
             }
 
-            template <typename ScalarPos, typename ScalarVel, typename ScalarAcc,
-                typename ScalarJerk, typename ScalarDJerk, typename Scalar>
-            auto fourth_order_pivot(const ScalarPos &xbar, const ScalarVel &vbar, 
-                const ScalarAcc &abar, const ScalarJerk &jbar, const ScalarDJerk &dbar, 
-                const std::array<Scalar,16> t)
-            {
-                std::array<ScalarPos,16>   xs;
-                std::array<ScalarVel,16>   vs;
-                std::array<ScalarAcc,16>   as;
-                std::array<ScalarJerk,16>  js;
-                std::array<ScalarDJerk,16> ds;
-                ds[0] = 0.;     js[0] = 0.;     as[0] = 0.;
-                ds[1] = dbar;   js[1] = jbar;   as[1] = as[0] + (1./2.) * jbar * (t[1]-t[0]);
-                ds[2] = 0.;     js[2] = jbar;   as[2] = as[1] + jbar * (t[2]-t[1]);
-                ds[3] = -dbar;  js[3] = 0.;     as[3] = abar;
-                ds[4] = 0.;     js[4] = 0.;     as[4] = abar;
-                ds[5] = -dbar;  js[5] = -jbar;  as[5] = as[4] - (1./2.) * jbar * (t[5]-t[4]);
-                ds[6] = 0.;     js[6] = -jbar;  as[6] = as[5] - jbar * (t[6]-t[5]);
-                ds[7] = dbar;   js[7] = 0.;     as[7] = 0.;
-                ds[8] = 0.;     js[8] = 0.;     as[8] = 0.;
-                ds[9] = -dbar;  js[9] = -jbar;  as[9] = as[8] - (1./2.) * jbar * (t[9]-t[8]);
-                ds[10] = 0.;    js[10] = -jbar; as[10] = as[9] - jbar * (t[10]-t[9]);
-                ds[11] = dbar;  js[11] = 0.;    as[11] = -abar;
-                ds[12] = 0.;    js[12] = 0.;    as[12] = -abar;
-                ds[13] = dbar;  js[13] = jbar;  as[13] = as[12] + (1./2.) * jbar * (t[13]-t[12]);
-                ds[14] = 0.;    js[14] = jbar;  as[14] = as[13] + jbar * (t[14]-t[13]);
-                ds[15] = -dbar; js[15] = 0.;    as[15] = 0.;
-                vs[0] = 0.;
-                vs[1] = vs[0] + (1./6.) * dbar * pow(t[1]-t[0],3);
-                vs[2] = vs[1] + (1./2.) * jbar * pow(t[2]-t[1],2);
-                vs[3] = vs[2] + (1./4.) * jbar * pow(t[3]-t[2],3);
-                vs[4] = vs[3] + abar * (t[4]-t[3]);
-                vs[5] = vs[4] + (1./6.) * dbar * pow(t[5]-t[4],3);
-                vs[6] = vs[5] + (1./2.) * jbar * pow(t[6]-t[5],2);
-                vs[7] = vs[6] + (1./6.) * dbar * pow(t[7]-t[6],3);
-                vs[8] = vbar;
-                vs[9] = vs[8] - (1./6.) * dbar * pow(t[9]-t[8],3);
-                vs[10] = vs[9] - (1./2.) * jbar * pow(t[10]-t[9],2);
-                vs[11] = vs[10] - (1./6.) * dbar * pow(t[11]-t[10],3);
-                vs[12] = vs[11] - abar * (t[12]-t[11]);
-                vs[13] = vs[12] - (1./6.) * dbar * pow(t[13]-t[12],3);
-                vs[14] = vs[13] - (1./2.) * jbar * pow(t[14]-t[13],2);
-                vs[15] = vs[14] - (1./6.) * dbar * pow(t[15]-t[14],3);
-                xs[0] = 0.;
-                xs[1] = xs[0] + (1./24.) * dbar * pow(t[1]-t[0],4);
-                xs[2] = xs[1] + (1./6.) * jbar * pow(t[2]-t[1],3);
-                xs[3] = xs[2] + (1./24.) * dbar * pow(t[3]-t[2],4);
-                xs[4] = xs[3] + (1./2.) * abar * pow(t[4]-t[3],2);
-                xs[5] = xs[4] + (1./24.) * dbar * pow(t[5]-t[4],4);
-                xs[6] = xs[5] + (1./6.) * jbar * pow(t[6]-t[5],3);
-                xs[7] = xs[6] + (1./24.) * dbar * pow(t[7]-t[6],4);
-                xs[8] = xs[7] + vbar * (t[8]-t[7]);
-                xs[9] = xs[8] + (1./24.) * dbar * pow(t[9]-t[8],4);
-                xs[10] = xs[9] + (1./6.) * jbar * pow(t[10]-t[9],3);
-                xs[11] = xs[10] + (1./24.) * dbar * pow(t[11]-t[10],4);
-                xs[12] = xs[11] + (1./2.) * abar * pow(t[12]-t[11],2);
-                xs[13] = xs[12] + (1./24.) * dbar * pow(t[13]-t[12],4);
-                xs[14] = xs[13] + (1./6.) * jbar * pow(t[14]-t[13],3);
-                xs[15] = xs[14] + (1./24.) * dbar * pow(t[15]-t[14],4);
-                return std::make_tuple(xs, vs, as, js, ds);
-            }
-
-            template <typename ScalarPos, typename ScalarVel, typename ScalarAcc,
+            /**
+             * @brief compute the 4th order trajectory given constraints and time profile
+             * 
+             * @tparam integral_segment=100 
+             * @tparam ScalarPos 
+             * @tparam ScalarVel 
+             * @tparam ScalarAcc 
+             * @tparam ScalarJerk 
+             * @tparam ScalarDJerk 
+             * @tparam Scalar 
+             * @tparam Iterable 
+             * @param xbar target position
+             * @param vbar maximum allowed velocity
+             * @param abar maximum allowed acceleration
+             * @param jbar maximum allowed jerk
+             * @param dbar maximum allowed derivative of the jerk
+             * @param t_vbar computed constant velocity time profile
+             * @param t_abar computed constant acceleration time profile
+             * @param t_jbar computed constant jerk time profile
+             * @param t_dbar computed time switch for djerk
+             * @param time_points 
+             * @return auto tuple of size 5 of container defining the trajectory
+             */
+            template <size_t integral_segment=100, typename ScalarPos, typename ScalarVel, typename ScalarAcc,
                 typename ScalarJerk, typename ScalarDJerk, typename Scalar, typename Iterable>
             auto fourth_order_profile(const ScalarPos &xbar, const ScalarVel &vbar, 
                 const ScalarAcc &abar, const ScalarJerk &jbar, const ScalarDJerk &dbar, 
@@ -293,20 +381,19 @@ namespace trjtools {
                     js.resize(time_points.size());
                     ds.resize(time_points.size());
                 }
-                auto [xp, vp, ap, jp, dp] = fourth_order_pivot(xbar, vbar, abar, jbar, dbar, tp);
+                auto [x_fn, v_fn, a_fn, j_fn, dj_fn] = helper::fourth_order_profile_fn<integral_segment>(dbar, tp);
+                // auto dj_fn = helper::fourth_order_djerk_profile(dbar, tp);
+
                 for (size_t i=0; i<std::size(time_points); i++) {
                     auto t = time_points[i];
                     assert(t > tp[0] && t < tp[15]);
-                    if (t < tp[1]) {
-                        ds[i] = dbar;
-                        js[i] = 0. + dbar * t;
-                        as[i] = 0. + (1./2.) * dbar * pow(t,2);
-                        vs[i] = 0. + (1./6.) * dbar * pow(t,3);
-                        as[i] = 0. + (1./24.) * dbar * pow(t,4);
-                    } else if (t < tp[2]) {
-                        ds[i] = 0;
-                    }
+                    ds[i] = dj_fn(t);
+                    js[i] = j_fn(t);
+                    as[i] = a_fn(t);
+                    vs[i] = v_fn(t);
+                    xs[i] = x_fn(t);
                 }
+                return std::make_tuple(xs,vs,as,js,ds);
             }
         } // namespace axis1d
     } // namespace trajectory

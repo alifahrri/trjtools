@@ -1,0 +1,15 @@
+sudo: required
+
+services:
+  - docker
+  
+language: cpp
+
+compiler:
+  - gcc
+
+before_script:
+  - docker build -t trjtools -f docker/Dockerfile .
+
+script:
+  - docker run --rm trjtools

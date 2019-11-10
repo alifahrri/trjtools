@@ -2,6 +2,8 @@ find_package(GTest REQUIRED)
 add_executable(
     ${PROJECT_NAME}-test
     src/test_axis1d.cpp
+    src/test_axis2d.cpp
+    src/test_axis3d.cpp
     src/test_utility.cpp
 )
 target_link_libraries(${PROJECT_NAME}-test ${GTEST_BOTH_LIBRARIES} pthread)
