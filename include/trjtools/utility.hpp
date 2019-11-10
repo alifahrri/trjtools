@@ -245,7 +245,7 @@ namespace trjtools {
             );
             Container c{};
             if constexpr (traits::is_resizeable<Container>::value)
-                c.resize(n);
+                c.resize(n+1);
             TRJTOOLS_ASSERT(std::size(c)==(n+1), 
                 std::to_string(std::size(c))
             );
